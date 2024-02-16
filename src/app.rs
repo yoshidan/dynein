@@ -15,10 +15,12 @@
  */
 
 use ::serde::{Deserialize, Serialize};
+use backon::ExponentialBuilder;
 use log::{debug, error, info};
 use rusoto_dynamodb::{AttributeDefinition, KeySchemaElement, TableDescription};
 use rusoto_signature::Region;
 use serde_yaml::Error as SerdeYAMLError;
+use std::time::Duration;
 use std::{
     collections::HashMap,
     env, error,
@@ -175,6 +177,42 @@ pub struct Config {
     pub using_table: Option<String>,
     pub using_port: Option<u32>,
     // pub cache_expiration_time: Option<i64>, // in second. default 300 (= 5 minutes)
+    #[serde(default)]
+    pub retry_batch_write_item: RetryConfig,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct RetryConfig {
+    pub enabled: bool,
+    #[serde(default)]
+    pub jitter: bool,
+    pub factor: Option<f32>,
+    pub min_delay: Option<u64>,
+    pub max_delay: Option<u64>,
+    pub max_times: Option<usize>,
+}
+
+impl From<RetryConfig> for ExponentialBuilder {
+    fn from(value: RetryConfig) -> Self {
+        let mut builder = Self::default().with_max_times(10);
+
+        if value.jitter {
+            builder = builder.with_jitter();
+        }
+        if let Some(factor) = value.factor {
+            builder = builder.with_factor(factor);
+        }
+        if let Some(max_times) = value.max_times {
+            builder = builder.with_max_times(max_times);
+        }
+        if let Some(max_delay) = value.max_delay {
+            builder = builder.with_max_delay(Duration::from_secs(max_delay));
+        }
+        if let Some(min_delay) = value.min_delay {
+            builder = builder.with_min_delay(Duration::from_secs(min_delay));
+        }
+        builder
+    }
 }
 
 /// Cache is saved at `~/.dynein/cache.yml`
@@ -730,6 +768,7 @@ mod tests {
                 using_region: Some(String::from("ap-northeast-1")),
                 using_table: Some(String::from("cfgtbl")),
                 using_port: Some(8000),
+                retry_batch_write_item: RetryConfig::default(),
             }),
             cache: None,
             overwritten_region: None,
@@ -763,5 +802,30 @@ mod tests {
         assert_eq!(cx5.effective_table_name(), String::from("argtbl"));
 
         Ok(())
+    }
+
+    #[test]
+    fn test_retry_config() {
+        let config1 = RetryConfig::default();
+        let actual = ExponentialBuilder::from(config1);
+        let expected = ExponentialBuilder::default().with_max_times(10);
+        assert_eq!(format!("{:?}", actual), format!("{:?}", expected));
+
+        let config2 = RetryConfig {
+            enabled: true,
+            jitter: true,
+            factor: Some(2.0),
+            min_delay: Some(20),
+            max_delay: Some(100),
+            max_times: Some(20),
+        };
+        let actual = ExponentialBuilder::from(config2);
+        let expected = ExponentialBuilder::default()
+            .with_jitter()
+            .with_factor(2.0)
+            .with_min_delay(Duration::from_secs(20))
+            .with_max_delay(Duration::from_secs(100))
+            .with_max_times(20);
+        assert_eq!(format!("{:?}", actual), format!("{:?}", expected));
     }
 }

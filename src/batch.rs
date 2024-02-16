@@ -14,9 +14,10 @@
  * limitations under the License.
  */
 
+use backon::{ExponentialBuilder, Retryable};
 use base64::{engine::general_purpose, Engine as _};
 use bytes::Bytes;
-use log::{debug, error};
+use log::{debug, error, warn};
 use rusoto_core::RusotoError;
 use rusoto_dynamodb::{
     AttributeValue, BatchWriteItemError, BatchWriteItemInput, DeleteRequest, DynamoDb,
@@ -205,7 +206,23 @@ async fn batch_write_item_api(
         ..Default::default()
     };
 
-    match ddb.batch_write_item(req).await {
+    let retry_config = cx.config.unwrap_or_default().retry_batch_write_item;
+    let res = if retry_config.enabled {
+        let backoff = ExponentialBuilder::from(retry_config.clone());
+        let f = || async { ddb.clone().batch_write_item(req.clone()).await };
+        f.retry(&backoff)
+            .when(|err| match err {
+                RusotoError::Service(BatchWriteItemError::ProvisionedThroughputExceeded(e)) => {
+                    warn!("Retry batch_write_item : {}", e);
+                    true
+                }
+                _ => false,
+            })
+            .await
+    } else {
+        ddb.batch_write_item(req).await
+    };
+    match res {
         Ok(res) => Ok(res.unprocessed_items),
         Err(e) => Err(e),
     }
