@@ -224,6 +224,10 @@ async fn batch_write_item_api(
                     warn!("Retry batch_write_item : {}", e);
                     true
                 }
+                RusotoError::HttpDispatch(e) => {
+                    warn!("Retry batch_write_item : {}", e);
+                    true
+                }
                 RusotoError::Unknown(response) => {
                     if response.body_as_str().contains("ThrottlingException") {
                         warn!("Retry batch_write_item : {}", err);
