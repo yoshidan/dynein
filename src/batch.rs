@@ -208,40 +208,43 @@ async fn batch_write_item_api(
 
     let retry_config = cx.config.unwrap_or_default().retry_batch_write_item;
     let res = if retry_config.enabled {
-        info!("retry enabled");
+        warn!("retry enabled");
         let backoff = ExponentialBuilder::from(retry_config.clone());
         let f = || async { ddb.clone().batch_write_item(req.clone()).await };
         f.retry(&backoff)
-            .when(|err| match err {
-                RusotoError::Service(BatchWriteItemError::ProvisionedThroughputExceeded(e)) => {
-                    warn!("Retry batch_write_item : {}", e);
-                    true
-                }
-                RusotoError::Service(BatchWriteItemError::InternalServerError(e)) => {
-                    warn!("Retry batch_write_item : {}", e);
-                    true
-                }
-                RusotoError::Service(BatchWriteItemError::RequestLimitExceeded(e)) => {
-                    warn!("Retry batch_write_item : {}", e);
-                    true
-                }
-                RusotoError::HttpDispatch(e) => {
-                    warn!("Retry batch_write_item : {}", e);
-                    true
-                }
-                RusotoError::Unknown(response) => {
-                    if response.body_as_str().contains("ThrottlingException") {
-                        warn!("Retry batch_write_item : {}", err);
+            .when(|err| {
+                warn!("try to retry");
+                match err {
+                    RusotoError::Service(BatchWriteItemError::ProvisionedThroughputExceeded(e)) => {
+                        info!("Retry batch_write_item : {}", e);
                         true
-                    } else {
-                        false
                     }
+                    RusotoError::Service(BatchWriteItemError::InternalServerError(e)) => {
+                        info!("Retry batch_write_item : {}", e);
+                        true
+                    }
+                    RusotoError::Service(BatchWriteItemError::RequestLimitExceeded(e)) => {
+                        info!("Retry batch_write_item : {}", e);
+                        true
+                    }
+                    RusotoError::HttpDispatch(e) => {
+                        info!("Retry batch_write_item : {}", e);
+                        true
+                    }
+                    RusotoError::Unknown(response) => {
+                        if response.body_as_str().contains("ThrottlingException") {
+                            info!("Retry batch_write_item : {}", err);
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    _ => false,
                 }
-                _ => false,
             })
             .await
     } else {
-        info!("retry disabled");
+        warn!("retry disabled");
         ddb.batch_write_item(req).await
     };
     match res {
